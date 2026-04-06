@@ -1,0 +1,112 @@
+--- a/drivers/net/wireless/wifi_utility/Makefile
++++ b/drivers/net/wireless/wifi_utility/Makefile
+@@ -1,4 +1,5 @@
+ #always build-in
++obj-y += mt_wifi_dt.o
+ obj-y += mt_wifi_mtd.o
+ obj-y += pci_mediatek_rbus.o
+ 
+--- /dev/null
++++ b/drivers/net/wireless/wifi_utility/mt_wifi_dt.c
+@@ -0,0 +1,101 @@
++#include <linux/errno.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/string.h>
++#include <linux/types.h>
++
++#define MT_WIFI_OF_EEPROM_DATA	"mediatek,eeprom-data"
++
++static const char * const mt_wifi_of_compatibles[] = {
++	"mediatek,wbsys",
++	"mediatek,mt7986-wmac",
++	"mediatek,mt7981-wmac",
++	"mediatek,mt7622-wmac",
++};
++
++static bool mt_wifi_of_is_wifi_node(const struct device_node *np)
++{
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(mt_wifi_of_compatibles); i++) {
++		if (of_device_is_compatible(np, mt_wifi_of_compatibles[i]))
++			return true;
++	}
++
++	return false;
++}
++
++static struct device_node *mt_wifi_of_find_eeprom_node(void)
++{
++	struct device_node *np;
++
++	for_each_node_with_property(np, MT_WIFI_OF_EEPROM_DATA) {
++		if (!of_device_is_available(np))
++			continue;
++
++		if (mt_wifi_of_is_wifi_node(np))
++			return np;
++	}
++
++	for_each_node_with_property(np, MT_WIFI_OF_EEPROM_DATA) {
++		if (of_device_is_available(np))
++			return np;
++	}
++
++	return NULL;
++}
++
++int mt_of_read_eeprom_data(loff_t offset, size_t len, u8 *buf)
++{
++	struct device_node *np;
++	const u8 *data;
++	size_t data_len;
++	int prop_len;
++	int ret = 0;
++
++	if (!buf)
++		return -EINVAL;
++
++	if (!len)
++		return 0;
++
++	if (offset < 0)
++		return -EINVAL;
++
++	np = mt_wifi_of_find_eeprom_node();
++	if (!np)
++		return -ENOENT;
++
++	data = of_get_property(np, MT_WIFI_OF_EEPROM_DATA, &prop_len);
++	if (!data) {
++		ret = -ENOENT;
++		goto out;
++	}
++
++	if (prop_len <= 0 || !IS_ALIGNED(prop_len, sizeof(u32))) {
++		ret = -EINVAL;
++		goto out;
++	}
++
++	data_len = prop_len;
++	if ((u64)offset > data_len || len > data_len - (size_t)offset) {
++		ret = -ERANGE;
++		goto out;
++	}
++
++	/*
++	 * mediatek,eeprom-data is a uint32-array in DT, but OF gives us the raw
++	 * property bytes. Treat it as a byte stream so partial reads preserve the
++	 * EEPROM image exactly.
++	 */
++	memcpy(buf, data + offset, len);
++	pr_debug("%s : using OF EEPROM data from %pOF (%s, %zu bytes)\n",
++		 __func__, np, MT_WIFI_OF_EEPROM_DATA, data_len);
++
++out:
++	of_node_put(np);
++
++	return ret;
++}
++EXPORT_SYMBOL(mt_of_read_eeprom_data);
